@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database Service
+  quickbuild-db:
+    image: postgres:13-alpine
+    container_name: quickbuild-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quickbuild
+      POSTGRES_USER: qbuser
+      # SECURITY WARNING: This is a default password. It should be changed.
+      POSTGRES_PASSWORD: MySecurePassword123!
+    volumes:
+      - qb-db-data:/var/lib/postgresql/data
+    networks:
+      - quickbuild-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qbuser -d quickbuild"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # QuickBuild Server Service
+  quickbuild-server:
+    build:
+      context: .
+      dockerfile: ./server/Dockerfile
+    container_name: quickbuild-server
+    restart: unless-stopped
+    depends_on:
+      quickbuild-db:
+        condition: service_healthy
+    ports:
+      - "8810:8810"
+    environment:
+      DB_HOST: quickbuild-db
+      DB_NAME: quickbuild
+      DB_USER: qbuser
+      DB_PASSWORD: MySecurePassword123!
+    volumes:
+      - qb-server-conf:/opt/quickbuild/conf
+      - qb-server-logs:/opt/quickbuild/logs
+      - qb-server-storage:/opt/quickbuild/storage
+      - qb-server-plugins:/opt/quickbuild/plugins/site
+    networks:
+      - quickbuild-net
+
+  # QuickBuild Build Agent Service
+  quickbuild-agent:
+    build:
+      context: .
+      dockerfile: ./agent/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - quickbuild-server
+    environment:
+      SERVER_URL: http://quickbuild-server:8810/
+    networks:
+      - quickbuild-net
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  qb-db-data:
+  qb-server-conf:
+  qb-server-logs:
+  qb-server-storage:
+  qb-server-plugins:
+
+networks:
+  quickbuild-net:
+    driver: bridge
