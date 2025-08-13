@@ -1,1 +1,200 @@
-How to Use an Agentic AI to Build This ProjectThis guide provides best practices for using an agentic AI like GitHub Copilot (in agent mode with Claude 4) to build the QuickBuild project. The key is to provide clear, comprehensive instructions.The "Master Prompt" StrategyThe most effective way to guide the AI is to give it a complete plan. The README.md file in this project is designed to be that "master prompt." It contains everything the AI needs to know: the goal, the file structure, and the exact content of every file.Recommended WorkflowStart a New Session: Begin a new chat session with your AI agent to ensure there's no conflicting context from previous conversations.Provide the Master Prompt: Your first instruction to the agent should be to read and understand the master plan.Initial Prompt Example:"Hello. I need you to build a containerized QuickBuild environment. I have a complete plan and all the required code in a README.md file. Please read the README.md in my workspace first. Your task is to create the directory structure and all the files exactly as specified in that document. Do not start writing any code until you have reviewed the entire README.md."Let the Agent Work: The agent should now:Acknowledge the plan.Create the server/ and agent/ directories.Create each file (docker-compose.yml, server/Dockerfile, etc.) and populate it with the exact content from the README.md.Verify the Output: After the agent reports that it has completed the task, review the generated files. Because the README.md was so specific, there should be very few errors.Avoid Vague Instructions: Do not start with a vague prompt like "Create a Docker setup for QuickBuild." This gives the AI too much freedom and can lead to unpredictable results. By providing the complete solution upfront in the README.md, you are using the AI as a powerful automation tool rather than a speculative creator.Key Principles for SuccessBe Explicit: The README.md is highly explicit, which is the most important technique. It tells the AI exactly what to do.Context is King: By telling the agent to read the file first, you are providing all the necessary context in one go.Break Down the Problem: The README.md naturally breaks down the problem into a file-by-file structure, which is an easy-to-follow plan for the agent.By following this approach, you are leveraging the agent's ability to execute a detailed plan, which is a more reliable and efficient way to use current agentic AI technology.
+Project: Containerized QuickBuild Environment1. Project GoalThe objective is to create a complete, containerized environment for QuickBuild using Docker and Docker Compose. The setup will consist of three main services:quickbuild-server: The main QuickBuild application server.quickbuild-db: A dedicated PostgreSQL database for the server.quickbuild-agent: A scalable build agent that connects to the server.This project should be structured to be self-contained and easily reproducible. The AI's task is to create all the necessary configuration files as specified below.2. Required Directory StructureThe final project must have the following directory structure. The quickbuild.tar.gz file will be provided manually by the user.quickbuild-docker/
+│
+├── docker-compose.yml
+├── quickbuild.tar.gz  <-- User must place this file here.
+│
+├── server/
+│   ├── Dockerfile
+│   └── entrypoint.sh
+│
+└── agent/
+    ├── Dockerfile
+    └── entrypoint.sh
+3. File ContentsBelow is the exact content required for each configuration file. Please create each file with the content provided.docker-compose.ymlThis file orchestrates all the services.version: '3.8'
+
+services:
+  # PostgreSQL Database Service
+  quickbuild-db:
+    image: postgres:13-alpine
+    container_name: quickbuild-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quickbuild
+      POSTGRES_USER: qbuser
+      # SECURITY WARNING: This is a default password. It should be changed.
+      POSTGRES_PASSWORD: MySecurePassword123!
+    volumes:
+      - qb-db-data:/var/lib/postgresql/data
+    networks:
+      - quickbuild-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qbuser -d quickbuild"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # QuickBuild Server Service
+  quickbuild-server:
+    build:
+      context: .
+      dockerfile: ./server/Dockerfile
+    container_name: quickbuild-server
+    restart: unless-stopped
+    depends_on:
+      quickbuild-db:
+        condition: service_healthy
+    ports:
+      - "8810:8810"
+    environment:
+      DB_HOST: quickbuild-db
+      DB_NAME: quickbuild
+      DB_USER: qbuser
+      DB_PASSWORD: MySecurePassword123!
+    volumes:
+      - qb-server-conf:/opt/quickbuild/conf
+      - qb-server-logs:/opt/quickbuild/logs
+      - qb-server-storage:/opt/quickbuild/storage
+      - qb-server-plugins:/opt/quickbuild/plugins/site
+    networks:
+      - quickbuild-net
+
+  # QuickBuild Build Agent Service
+  quickbuild-agent:
+    build:
+      context: .
+      dockerfile: ./agent/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - quickbuild-server
+    environment:
+      SERVER_URL: http://quickbuild-server:8810/
+    networks:
+      - quickbuild-net
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  qb-db-data:
+  qb-server-conf:
+  qb-server-logs:
+  qb-server-storage:
+  qb-server-plugins:
+
+networks:
+  quickbuild-net:
+    driver: bridge
+server/DockerfileThis Dockerfile sets up the QuickBuild server.# Use OpenJDK 21, as required by QuickBuild 14.0+
+FROM eclipse-temurin:21-jdk-jammy
+
+# Define the installation directory
+ENV QB_HOME /opt/quickbuild
+WORKDIR $QB_HOME
+
+# Copy the distribution file from the build context
+COPY quickbuild.tar.gz .
+
+# Extract QuickBuild and move contents to the QB_HOME directory
+RUN set -ex && \
+    tar -xzf quickbuild.tar.gz && \
+    DIST_DIR=$(ls -d quickbuild-*/) && \
+    mv $DIST_DIR* . && \
+    rmdir $DIST_DIR && \
+    rm quickbuild.tar.gz
+
+# Configure memory settings (1GB recommended for the server)
+RUN sed -i 's/wrapper.java.maxmemory=.*/wrapper.java.maxmemory=1024/' conf/wrapper.conf
+
+# Add and prepare the entrypoint script
+COPY server/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Expose the default QuickBuild web interface port
+EXPOSE 8810
+
+# Define volumes for persistence
+VOLUME ["$QB_HOME/conf", "$QB_HOME/logs", "$QB_HOME/storage", "$QB_HOME/plugins/site"]
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Default command to run the server in console mode
+CMD ["bin/server.sh", "console"]
+server/entrypoint.shThis script configures the database connection at runtime.#!/bin/bash
+set -e
+
+QB_HOME="/opt/quickbuild"
+HIBERNATE_PROPS="${QB_HOME}/conf/hibernate.properties"
+
+# Check if the configuration file still uses the default H2 database
+if grep -q "hibernate.connection.driver_class=org.h2.Driver" "$HIBERNATE_PROPS" || [ ! -f "$HIBERNATE_PROPS" ]; then
+    echo "Configuring hibernate.properties for PostgreSQL..."
+
+    if [ -z "$DB_PASSWORD" ]; then
+        echo "Error: DB_PASSWORD environment variable not set. Cannot configure database."
+        exit 1
+    fi
+
+    # Create/Overwrite hibernate.properties with PostgreSQL settings
+    cat > "$HIBERNATE_PROPS" <<EOF
+# Auto-generated by Docker entrypoint script
+hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+hibernate.connection.driver_class=org.postgresql.Driver
+hibernate.connection.url=jdbc:postgresql://${DB_HOST:-quickbuild-db}:${DB_PORT:-5432}/${DB_NAME:-quickbuild}
+hibernate.connection.username=${DB_USER:-qbuser}
+hibernate.connection.password=${DB_PASSWORD}
+hibernate.c3p0.min_size=5
+hibernate.c3p0.max_size=20
+EOF
+    echo "hibernate.properties configured for PostgreSQL."
+else
+    echo "hibernate.properties appears already configured. Skipping auto-configuration."
+fi
+
+# Execute the main command (e.g., "bin/server.sh console")
+exec "$@"
+agent/DockerfileThis Dockerfile sets up the QuickBuild agent.# Use OpenJDK 21
+FROM eclipse-temurin:21-jdk-jammy
+
+# Define the installation directory
+ENV QB_AGENT_HOME /opt/quickbuild-agent
+WORKDIR $QB_AGENT_HOME
+
+# Copy the distribution file from the build context
+COPY quickbuild.tar.gz /tmp/quickbuild.tar.gz
+
+# Efficiently install the agent from the main distribution
+RUN set -ex && \
+    tar -xzf /tmp/quickbuild.tar.gz --wildcards '*/lib/agent.tar.gz' -C /tmp && \
+    AGENT_PKG=$(find /tmp -name agent.tar.gz) && \
+    tar -xzf $AGENT_PKG -C $QB_AGENT_HOME && \
+    rm -rf /tmp/quickbuild.tar.gz /tmp/quickbuild-*
+
+# Configure memory settings (256MB recommended for agents)
+RUN sed -i 's/wrapper.java.maxmemory=.*/wrapper.java.maxmemory=256/' conf/wrapper.conf
+
+# Add and prepare the entrypoint script
+COPY agent/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+VOLUME ["$QB_AGENT_HOME/logs"]
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Default command to run the agent in console mode
+CMD ["bin/agent.sh", "console"]
+agent/entrypoint.shThis script configures the agent's connection to the server at runtime.#!/bin/bash
+set -e
+
+QB_AGENT_HOME="/opt/quickbuild-agent"
+NODE_PROPS="${QB_AGENT_HOME}/conf/node.properties"
+
+# Use the SERVER_URL environment variable if set, otherwise default
+SERVER_URL="${SERVER_URL:-http://quickbuild-server:8810/}"
+
+echo "Configuring agent to connect to: $SERVER_URL"
+
+# Update the serverUrl in node.properties
+sed -i "s|^serverUrl=.*|serverUrl=${SERVER_URL}|" "$NODE_PROPS"
+
+# Execute the main command (e.g., "bin/agent.sh console")
+exec "$@"
+4. Final InstructionsPlease proceed with creating these files in the specified directory structure. Do not deviate from the provided content.
